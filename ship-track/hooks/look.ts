@@ -42,6 +42,14 @@ async function liveStatus($: EngineInterface, url: string): Promise<number> {
   }
 }
 
+// "owner/name" from a GitHub remote in either form (https or git@), else the
+// last part of the folder path.
+export function repoName(remote: string | null, folder: string): string {
+  const github = remote?.match(/github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i)
+
+  return github ? github[1]! : folder.split(/[\\/]/).filter(Boolean).pop() ?? folder
+}
+
 const DEPLOYED_URL = /https:\/\/[^\s'"<>)]+?\.(?:workers|pages)\.dev\b[^\s'"<>)]*/i
 
 // What a successful deploy changes. The workers.dev or pages.dev address
@@ -61,6 +69,7 @@ export async function look($: EngineInterface): Promise<Snapshot> {
   const saved = await remembered($, cwd)
   const empty: Snapshot = {
     isRepo: false,
+    repo: repoName(null, cwd),
     branch: '',
     dirty: 0,
     ahead: null,
@@ -79,7 +88,8 @@ export async function look($: EngineInterface): Promise<Snapshot> {
     return empty
   }
 
-  const [branch, status, counts, last, remote, pr, live] = await Promise.all([
+  const [top, branch, status, counts, last, remote, pr, live] = await Promise.all([
+    run($, ['git', 'rev-parse', '--show-toplevel']),
     run($, ['git', 'rev-parse', '--abbrev-ref', 'HEAD']),
     run($, ['git', 'status', '--porcelain']),
     run($, ['git', 'rev-list', '--left-right', '--count', '@{u}...HEAD']),
@@ -104,6 +114,7 @@ export async function look($: EngineInterface): Promise<Snapshot> {
   return {
     ...empty,
     isRepo: true,
+    repo: repoName(remote, top ?? cwd),
     branch: branch ?? 'HEAD',
     dirty: status ? status.split('\n').filter(Boolean).length : 0,
     ahead: ahead ?? null,

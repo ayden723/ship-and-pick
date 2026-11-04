@@ -8,7 +8,7 @@ const PANE = 'ship-track'
 const TITLE = 'Ship Track'
 // Change the tag when the snapshot's fields change.
 const snapshot = atom({ plugin: 'ship-track', key: 'snapshot' } as const, null, {
-  shape: 'snapshot-1',
+  shape: 'snapshot-2',
 })
 const isChecking = atom({ plugin: 'ship-track', key: 'isChecking' } as const, false)
 
@@ -103,7 +103,7 @@ export const register: Register = on => {
     if (!found.isRepo) {
       return (
         <Box flexDirection="column" gap={1}>
-          <Text dimColor>This folder isn't a git repo, so there's nothing to track yet.</Text>
+          <Text dimColor>{found.repo} isn't a git repo, so there's nothing to track yet.</Text>
           <Button key="refresh" dimColor label="Check again" onPress={() => refresh($)} />
         </Box>
       )
@@ -114,10 +114,15 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" gap={1}>
+        <Text wrap="truncate-end">
+          <Text weight="semibold">{found.repo}</Text>
+          <Text dimColor>  {found.branch}</Text>
+        </Text>
+
         {e.surface !== 'terminal' && 'Svg' in elements ? (
           <elements.Svg
             source={toSvg(stages)}
-            alt={stages.map(stage => `${stage.name}: ${stage.note}`).join('. ')}
+            alt={`${found.repo}. ` + stages.map(stage => `${stage.name}: ${stage.note}`).join('. ')}
           />
         ) : (
           <Box flexDirection="column">
@@ -149,7 +154,7 @@ export const register: Register = on => {
             {found.liveUrl ?? 'not set'}
           </Text>
           <Text dimColor size="footnote">
-            {checking ? 'Checking…' : `Checked ${ago(found.checkedAt, now)} on ${found.branch}`}
+            {checking ? 'Checking…' : `Checked ${ago(found.checkedAt, now)}`}
           </Text>
         </Box>
 

@@ -5,6 +5,8 @@ export type PullRequest = { number: number; state: string; url: string }
 // What one look at the project found; times are epoch milliseconds.
 export type Snapshot = {
   isRepo: boolean
+  // owner/name from the GitHub remote, else the folder's name.
+  repo: string
   branch: string
   dirty: number
   // Commits on this branch that origin does not have; null when the branch

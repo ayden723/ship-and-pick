@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { afterDeploy, storeKey } from '../hooks/look'
+import { afterDeploy, repoName, storeKey } from '../hooks/look'
 import { toStages, toSvg } from '../hooks/stages'
 import type { Snapshot } from '../types'
 
@@ -8,6 +8,7 @@ const NOW = 1_700_000_000_000
 
 const BASE: Snapshot = {
   isRepo: true,
+  repo: 'me/site',
   branch: 'main',
   dirty: 0,
   ahead: 0,
@@ -62,6 +63,7 @@ test('the drawing is one small svg with the notes in it', () => {
 test('the pane draws the track from git on every surface', async ($, on) => {
   const answers: Record<string, string> = {
     'rev-parse --is-inside-work-tree': 'true',
+    'rev-parse --show-toplevel': 'C:/site',
     'rev-parse --abbrev-ref HEAD': 'main',
     'status --porcelain': ' M index.html\n',
     'rev-list --left-right --count @{u}...HEAD': '0\t1',
@@ -83,6 +85,7 @@ test('the pane draws the track from git on every surface', async ($, on) => {
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: 'me/site' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Add margin notes/ })).toBeDefined()
     expect(await ui.find({ key: 'ship' })).toBeDefined()
     expect(await ui.find({ key: 'url' })).toBeDefined()
@@ -95,6 +98,14 @@ test('the pane draws the track from git on every surface', async ($, on) => {
     }
     await ui.unmount()
   }
+})
+
+test('the repo is named from GitHub, else from the folder', () => {
+  expect(repoName('https://github.com/ayden723/ship-and-pick.git', 'C:/x')).toBe('ayden723/ship-and-pick')
+  expect(repoName('git@github.com:ayden723/site.git', 'C:/x')).toBe('ayden723/site')
+  expect(repoName('https://github.com/me/site', 'C:/x')).toBe('me/site')
+  expect(repoName(null, 'C:\\Users\\whoop\\Downloads\\New Spectrogram')).toBe('New Spectrogram')
+  expect(repoName('https://gitlab.com/me/site.git', 'C:/work/site/')).toBe('site')
 })
 
 test('a deploy keeps a live URL set by hand and ignores other links', () => {
