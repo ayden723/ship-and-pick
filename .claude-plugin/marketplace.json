@@ -1,0 +1,16 @@
+{
+  "name": "ship-and-pick",
+  "owner": { "name": "ayden723" },
+  "plugins": [
+    {
+      "name": "ship-track",
+      "source": "./ship-track",
+      "description": "A pane that shows where your work is on the way to production: committed, pushed to GitHub, and live on the site."
+    },
+    {
+      "name": "option-picker",
+      "source": "./option-picker",
+      "description": "Turns numbered options in Claude's replies into chips you can pick, then fills in \"Do 2, 4, 5\"."
+    }
+  ]
+}
