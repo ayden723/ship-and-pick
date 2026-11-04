@@ -24,12 +24,33 @@ async function run($: EngineInterface, argv: string[]): Promise<string | null> {
   }
 }
 
+const LIVE_TIMEOUT_MS = 6000
+
+// A site that never answers counts as unreachable instead of holding the
+// check, and with it the start of the session, open.
 async function liveStatus($: EngineInterface, url: string): Promise<number> {
+  let timer: { cancel: () => void } | undefined
+  const gaveUp = new Promise<number>(resolve => {
+    timer = $.clock.after(LIVE_TIMEOUT_MS, () => resolve(0))
+  })
   try {
-    return (await $.http.fetch(url, { method: 'GET' })).status
+    return await Promise.race([$.http.fetch(url, { method: 'GET' }).then(res => res.status), gaveUp])
   } catch {
     return 0
+  } finally {
+    timer?.cancel()
   }
+}
+
+const DEPLOYED_URL = /https:\/\/[^\s'"<>)]+?\.(?:workers|pages)\.dev\b[^\s'"<>)]*/i
+
+// What a successful deploy changes. The workers.dev or pages.dev address
+// wrangler printed becomes the live URL only when none is set, so a custom
+// domain set with /ship-track url stays.
+export function afterDeploy(saved: Remembered, output: string, at: number): Partial<Remembered> {
+  const url = output.match(DEPLOYED_URL)?.[0] ?? null
+
+  return url && !saved.liveUrl ? { lastDeployAt: at, liveUrl: url } : { lastDeployAt: at }
 }
 
 // One look at the project: git for the first two stops, the stored live URL

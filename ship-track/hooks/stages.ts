@@ -3,13 +3,6 @@ import type { Snapshot } from '../types'
 export type StageState = 'done' | 'waiting' | 'problem' | 'off'
 export type Stage = { name: string; state: StageState; note: string }
 
-const COLORS: Record<StageState, string> = {
-  done: '#2f9e6e',
-  waiting: '#d4902b',
-  problem: '#d0473f',
-  off: '#9aa0a6',
-}
-
 export function ago(at: number, now: number): string {
   const minutes = Math.max(0, Math.round((now - at) / 60000))
 
@@ -67,36 +60,56 @@ export function toStages(s: Snapshot, now: number): Stage[] {
 const escape = (text: string) =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
+
+// Colors for each theme. The drawing is shown as an image, which follows the
+// app's light or dark mode through prefers-color-scheme.
+const STYLE = `
+.done{--c:#1f8a5b}.waiting{--c:#b7791f}.problem{--c:#c2413a}.off{--c:#8a9099}
+.dot{fill:var(--c);stroke:var(--c)}.off .dot{fill:none}
+.ring{fill:none;stroke:var(--c)}
+.name{fill:var(--c);font:600 13px system-ui,-apple-system,"Segoe UI",sans-serif}
+.off .name{fill:#6b7079}
+.note{fill:#5b616b;font:11px system-ui,-apple-system,"Segoe UI",sans-serif}
+.mark{stroke:#fff}
+.rail{stroke:#c5c9cf}.rail.on{stroke:#1f8a5b}
+@media (prefers-color-scheme:dark){
+.done{--c:#4cc38a}.waiting{--c:#f0b24a}.problem{--c:#ef6a5f}.off{--c:#7d838c}
+.off .name{fill:#9aa0a8}.note{fill:#a3a9b2}.mark{stroke:#111418}
+.rail{stroke:#3d4249}.rail.on{stroke:#4cc38a}}`
+
 // Draws the track: three stops joined by a rail that fills in as work moves
 // along it. A stop that waits on something breathes; the rest stay still.
 export function toSvg(stages: Stage[]): string {
-  const width = 330
-  const xs = [45, 165, 285]
-  const y = 30
-  const muted = '#9aa0a6'
+  // Each stop gets a third of the width, room for its note's 24 characters.
+  const width = 408
+  const xs = [68, 204, 340]
+  const y = 28
+  const r = 12
+
   const rails = xs.slice(0, -1).map((x, i) => {
-    const filled = stages[i]!.state === 'done'
-    return `<line x1="${x + 13}" y1="${y}" x2="${xs[i + 1]! - 13}" y2="${y}" stroke="${filled ? COLORS.done : muted}" stroke-width="2" stroke-linecap="round" ${filled ? '' : 'stroke-dasharray="2 5" opacity="0.6"'}/>`
+    const isOn = stages[i]!.state === 'done'
+    const dash = isOn ? '' : ' stroke-dasharray="1 6"'
+    return `<line class="rail${isOn ? ' on' : ''}" x1="${x + r + 6}" y1="${y}" x2="${xs[i + 1]! - r - 6}" y2="${y}" stroke-width="2" stroke-linecap="round"${dash}/>`
   })
+
   const stops = stages.map((stage, i) => {
     const x = xs[i]!
-    const color = COLORS[stage.state]
-    const inner =
+    const mark =
       stage.state === 'done'
-        ? `<path d="M${x - 5} ${y} l3.5 3.5 l6.5 -7" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`
+        ? `<path class="mark" d="M${x - 5} ${y} l3.5 3.5 l6.5 -7" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`
         : stage.state === 'problem'
-          ? `<path d="M${x} ${y - 5} v6 M${x} ${y + 4.5} v0.5" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>`
-          : ''
-    const fill = stage.state === 'off' ? 'none' : color
-    const halo =
+          ? `<path class="mark" d="M${x} ${y - 5.5} v6.5 M${x} ${y + 5} v0.4" stroke-width="2.2" stroke-linecap="round"/>`
+          : stage.state === 'waiting'
+            ? `<circle class="mark" cx="${x}" cy="${y}" r="3" fill="none" stroke-width="2"/>`
+            : ''
+    const pulse =
       stage.state === 'waiting'
-        ? `<circle cx="${x}" cy="${y}" r="11" fill="none" stroke="${color}" stroke-width="1.5"><animate attributeName="r" values="11;17;11" dur="2.4s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.7;0;0.7" dur="2.4s" repeatCount="indefinite"/></circle>`
+        ? `<circle class="ring" cx="${x}" cy="${y}" r="${r}" stroke-width="1.5"><animate attributeName="r" values="${r};${r + 7};${r}" dur="2.4s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.8;0;0.8" dur="2.4s" repeatCount="indefinite"/></circle>`
         : ''
 
-    return `${halo}<circle cx="${x}" cy="${y}" r="11" fill="${fill}" stroke="${color}" stroke-width="2"/>${inner}
-<text x="${x}" y="${y + 32}" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="13" font-weight="600" fill="${stage.state === 'off' ? muted : color}">${escape(stage.name)}</text>
-<text x="${x}" y="${y + 50}" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="${muted}">${escape(stage.note.length > 22 ? `${stage.note.slice(0, 21)}…` : stage.note)}</text>`
+    return `<g class="${stage.state}">${pulse}<circle class="dot" cx="${x}" cy="${y}" r="${r}" stroke-width="2"/>${mark}<text class="name" x="${x}" y="${y + 34}" text-anchor="middle">${escape(stage.name)}</text><text class="note" x="${x}" y="${y + 52}" text-anchor="middle">${escape(clip(stage.note, 24))}</text></g>`
   })
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} 92" width="${width}" height="92">${rails.join('')}${stops.join('')}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} 90" width="${width}" height="90"><style>${STYLE}</style>${rails.join('')}${stops.join('')}</svg>`
 }

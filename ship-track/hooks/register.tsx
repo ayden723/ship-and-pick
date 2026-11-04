@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import { look, remember } from './look'
+import { afterDeploy, look, remember, remembered } from './look'
 import { ago, toStages, toSvg } from './stages'
 
 const PANE = 'ship-track'
@@ -14,7 +14,6 @@ const isChecking = atom({ plugin: 'ship-track', key: 'isChecking' } as const, fa
 
 const SHIPPING = /\b(git|gh|wrangler)\b|\bnpm run deploy\b|\bpnpm deploy\b/
 const DEPLOY = /\bwrangler\s+(pages\s+)?deploy\b|\b(npm|pnpm|yarn)\s+(run\s+)?deploy\b/
-const URL_IN_OUTPUT = /https:\/\/[^\s'"<>)]+?\.(?:workers\.dev|pages\.dev)\b[^\s'"<>)]*|https:\/\/[a-z0-9.-]+\.[a-z]{2,}(?=\s|$)/i
 const SHIP_PROMPT = 'Commit, push and deploy this, then confirm the live site shows the change.'
 
 async function refresh($: EngineInterface) {
@@ -71,9 +70,7 @@ export const register: Register = on => {
         if (DEPLOY.test(command) && ran.deny === undefined && ran.isError !== true) {
           const cwd = await $.session.cwd()
           const output = (ran.result as { stdout?: string } | undefined)?.stdout ?? ''
-          const url = output.match(URL_IN_OUTPUT)?.[0] ?? null
-          const at = await $.clock.now()
-          await remember($, cwd, url ? { lastDeployAt: at, liveUrl: url } : { lastDeployAt: at })
+          await remember($, cwd, afterDeploy(await remembered($, cwd), output, await $.clock.now()))
         }
         void refresh($)
       }

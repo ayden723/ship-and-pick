@@ -24,7 +24,7 @@ Commands:
 
 ## Option Picker
 
-When Claude ends a reply with numbered options ("which of these do you want?"), they show up as chips above the message box. Click the ones you want, then **Use** fills in `Do 1, 3` for you to send. Numbered steps that don't offer a choice are left alone, and the chips clear once you send a message.
+When Claude ends a reply with numbered options ("which of these do you want?"), they show up as chips above the message box. Click the ones you want, or press their numbers in an empty prompt, then **Use** fills in `Do 1, 3` for you to send. Numbered steps that don't offer a choice, numbered lists inside code blocks, and sub-steps under an option are left alone. The chips clear once you send a message.
 
 ## Install
 
@@ -52,5 +52,5 @@ Answer `y` to add the marketplace, then pick a scope. Each mod works on its own.
 ## Notes
 
 - Ship Track runs `git` and, if you have it, `gh` in your project folder. It only reads; it never commits or pushes.
-- The live site check is a plain request to the URL you set or the one `wrangler deploy` printed.
+- The live site check is a plain request to the URL you set or the workers.dev or pages.dev address `wrangler deploy` printed. A URL you set yourself is never replaced by a deploy. A site that doesn't answer within 6 seconds shows as not reachable.
 - Deploys that happen outside Claude (like Cloudflare's automatic builds from GitHub) aren't recorded, so Ship Track treats a pushed branch plus a responding site as live.

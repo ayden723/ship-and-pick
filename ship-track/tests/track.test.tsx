@@ -1,5 +1,6 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
+import { afterDeploy, storeKey } from '../hooks/look'
 import { toStages, toSvg } from '../hooks/stages'
 import type { Snapshot } from '../types'
 
@@ -94,4 +95,36 @@ test('the pane draws the track from git on every surface', async ($, on) => {
     }
     await ui.unmount()
   }
+})
+
+test('a deploy keeps a live URL set by hand and ignores other links', () => {
+  const output = 'update available, see https://github.com\nUploaded my-site\n  https://mysite.com (custom domain)\n  https://my-site.me.workers.dev\n'
+  expect(afterDeploy({ liveUrl: null, lastDeployAt: null }, output, NOW)).toEqual({
+    lastDeployAt: NOW,
+    liveUrl: 'https://my-site.me.workers.dev',
+  })
+  expect(afterDeploy({ liveUrl: 'https://mysite.com', lastDeployAt: null }, output, NOW)).toEqual({ lastDeployAt: NOW })
+  expect(afterDeploy({ liveUrl: null, lastDeployAt: null }, 'see https://github.com\n', NOW)).toEqual({ lastDeployAt: NOW })
+})
+
+test('a site that never answers counts as unreachable', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on, { [storeKey('C:/site')]: { liveUrl: 'https://slow.example.com', lastDeployAt: null } })
+  on('process.run', (_, e) => {
+    const out = e.argv.slice(1).join(' ') === 'rev-parse --is-inside-work-tree' ? 'true' : undefined
+    return { value: { exitCode: out === undefined ? 1 : 0, stdout: out ?? '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('http.fetch', () => new Promise(() => {}))
+  on('session.cwd', () => ({ value: 'C:/site' }))
+  on('command.register', () => ({ value: { command: 'ship-track' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  const started = $.session.start({ cwd: 'C:/site', surface: 'terminal', isInteractive: true })
+  await clock.advance(6000)
+  await started
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /site not reachable/ })).toBeDefined()
+  await ui.unmount()
 })

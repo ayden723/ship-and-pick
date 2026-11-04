@@ -37,6 +37,20 @@ test('reads a numbered menu into short labels', () => {
 test('ignores numbered steps that offer no choice', () => {
   expect(findOptions('Done.\n\n1. Installed it\n2. Ran the build\n3. Pushed')).toEqual([])
   expect(findOptions('Pick one:\n\n1. Only option')).toEqual([])
+  expect(
+    findOptions('I fixed the bug, which was in the router.\n\n1. Changed the route table\n2. Added a test\n3. Ran the build'),
+  ).toEqual([])
+  expect(findOptions('Which file?\n\n```\n1. not an option\n2. also not\n```')).toEqual([])
+})
+
+test('nested numbered lists stay inside their option', () => {
+  const reply = 'Pick one:\n1. Option A\n   1. sub detail\n   2. sub detail two\n2. Option B\n3. Option C'
+  expect(findOptions(reply).map(option => option.label)).toEqual(['Option A', 'Option B', 'Option C'])
+})
+
+test('a question after the list offers it', () => {
+  const reply = 'Found two problems:\n\n1. Ship Track can stall\n2. Picker misreads lists\n\nWant me to fix them?'
+  expect(findOptions(reply).map(option => option.n)).toEqual([1, 2])
 })
 
 test('picking chips fills the prompt with "Do 1, 3"', async ($, on) => {
@@ -59,6 +73,10 @@ test('picking chips fills the prompt with "Do 1, 3"', async ($, on) => {
     expect(await ui.find({ type: 'Text', text: /engine band/ })).toBeDefined()
     await ui.unmount()
   }
+
+  const keys = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await keys.find({ key: 'opt-2' }))?.props.hotkey).toBe('2')
+  await keys.unmount()
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await ui.press({ key: 'opt-3' })

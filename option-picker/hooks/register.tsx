@@ -54,7 +54,7 @@ export const register: Register = on => {
         <Box flexDirection="column" gap={1} paddingY={1}>
           <Box flexDirection="row" justifyContent="space-between">
             <Text dimColor size="footnote">
-              Pick from the last reply
+              Pick from the last reply{list.length > 1 ? ` · press 1–${Math.min(list.length, 9)} in an empty prompt` : ''}
             </Text>
             <Button key="dismiss" role="dismiss" plain dimColor label="Dismiss" onPress={() => clear($)} />
           </Box>
@@ -62,6 +62,7 @@ export const register: Register = on => {
             {list.map(option => (
               <Button
                 key={`opt-${option.n}`}
+                hotkey={option.n <= 9 ? String(option.n) : undefined}
                 variant={chosen.includes(option.n) ? 'primary' : 'secondary'}
                 onPress={() => toggle(option.n)}
               >
