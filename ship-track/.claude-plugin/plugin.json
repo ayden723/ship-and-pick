@@ -1,6 +1,5 @@
 {
   "name": "ship-track",
-  "version": "0.1.0",
   "description": "A pane that shows where your work is on the way to production: committed, pushed to GitHub, and live on the site.",
   "types": "./types/index.d.ts"
 }

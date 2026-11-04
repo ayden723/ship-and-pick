@@ -1,6 +1,5 @@
 {
   "name": "option-picker",
-  "version": "0.1.0",
   "description": "When Claude ends a reply with numbered options, shows them as chips above the prompt so you can pick a few and fill in \"Do 2, 4, 5\".",
   "types": "./types/index.d.ts"
 }
