@@ -17,6 +17,8 @@ export type Snapshot = {
   hasRemote: boolean
   pr: PullRequest | null
   liveUrl: string | null
+  // True when Ship Track found the live URL itself rather than being told it.
+  isLiveUrlGuessed: boolean
   liveStatus: number | null
   lastDeployAt: number | null
   commitsSinceDeploy: number
@@ -24,7 +26,7 @@ export type Snapshot = {
 }
 
 // Kept per project folder across sessions.
-export type Remembered = { liveUrl: string | null; lastDeployAt: number | null }
+export type Remembered = { liveUrl: string | null; lastDeployAt: number | null; isGuessed: boolean }
 
 declare module 'claude-code' {
   interface PluginState {

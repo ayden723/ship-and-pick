@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { cleanUrl, readWrangler, workersSubdomain } from '../hooks/detect'
 import { afterDeploy, commandFolder, repoName, storeKey } from '../hooks/look'
 import { toStages, toSvg } from '../hooks/stages'
 import type { Snapshot } from '../types'
@@ -17,6 +18,7 @@ const BASE: Snapshot = {
   hasRemote: true,
   pr: null,
   liveUrl: 'https://site.example.workers.dev',
+  isLiveUrlGuessed: false,
   liveStatus: 200,
   lastDeployAt: NOW - 600_000,
   commitsSinceDeploy: 0,
@@ -163,12 +165,14 @@ test('the pane follows the repo Claude pushed from, and comes back', async ($, o
 
 test('a deploy keeps a live URL set by hand and ignores other links', () => {
   const output = 'update available, see https://github.com\nUploaded my-site\n  https://mysite.com (custom domain)\n  https://my-site.me.workers.dev\n'
-  expect(afterDeploy({ liveUrl: null, lastDeployAt: null }, output, NOW)).toEqual({
+  expect(afterDeploy({ liveUrl: null, lastDeployAt: null, isGuessed: false }, output, NOW)).toEqual({
     lastDeployAt: NOW,
     liveUrl: 'https://my-site.me.workers.dev',
+    isGuessed: false,
   })
-  expect(afterDeploy({ liveUrl: 'https://mysite.com', lastDeployAt: null }, output, NOW)).toEqual({ lastDeployAt: NOW })
-  expect(afterDeploy({ liveUrl: null, lastDeployAt: null }, 'see https://github.com\n', NOW)).toEqual({ lastDeployAt: NOW })
+  expect(afterDeploy({ liveUrl: 'https://mysite.com', lastDeployAt: null, isGuessed: false }, output, NOW)).toEqual({ lastDeployAt: NOW })
+  expect(afterDeploy({ liveUrl: 'https://guess.com', lastDeployAt: null, isGuessed: true }, output, NOW).liveUrl).toBe('https://my-site.me.workers.dev')
+  expect(afterDeploy({ liveUrl: null, lastDeployAt: null, isGuessed: false }, 'see https://github.com\n', NOW)).toEqual({ lastDeployAt: NOW })
 })
 
 test('a site that never answers counts as unreachable', async ($, on) => {
@@ -191,4 +195,101 @@ test('a site that never answers counts as unreachable', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /site not reachable/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('a link with no site in it is not a live URL', () => {
+  expect(cleanUrl('https://')).toBe(null)
+  expect(cleanUrl('https://localhost')).toBe(null)
+  expect(cleanUrl('example.com')).toBe(null)
+  expect(cleanUrl(' https://my-site.me.workers.dev/ ')).toBe('https://my-site.me.workers.dev')
+  expect(cleanUrl('https://mysite.com/about')).toBe('https://mysite.com/about')
+})
+
+test('the Worker name and custom domains come from the wrangler config', () => {
+  const jsonc = '{\n  "name": "my-site",\n  // a comment with "name": "nope"\n  "routes": [{ "pattern": "mysite.com", "custom_domain": true }, "*.other.org/*"]\n}'
+  expect(readWrangler(jsonc)).toEqual({ name: 'my-site', domains: ['mysite.com', 'other.org'] })
+  expect(readWrangler('name = "toml-site"\nroute = "toml.dev/*"\n')).toEqual({ name: 'toml-site', domains: ['toml.dev'] })
+  expect(readWrangler('{ "name": "plain" }')).toEqual({ name: 'plain', domains: [] })
+  expect(workersSubdomain('curl https://other.someone.workers.dev/')).toBe('someone')
+})
+
+test('with no live URL set, the pane finds the Worker that answers', async ($, on) => {
+  mock.store(on, { [storeKey('C:/site')]: { liveUrl: 'https://', lastDeployAt: null }, 'workers-subdomain': 'me' })
+  on('process.run', (_, e) => {
+    const args = e.argv.slice(1).join(' ')
+    const out = args === 'rev-parse --is-inside-work-tree' ? 'true' : args === 'rev-parse --show-toplevel' ? 'C:/site' : undefined
+    return { value: { exitCode: out === undefined ? 1 : 0, stdout: out ?? '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('fs.read', (_, e) => (e.path.endsWith('wrangler.jsonc') ? { value: '{ "name": "my-site" }' } : Promise.reject(new Error('ENOENT'))))
+  on('http.fetch', (_, e) => ({ value: { status: e.url === 'https://my-site.me.workers.dev' ? 200 : 404 } as never }))
+  on('session.cwd', () => ({ value: 'C:/site' }))
+  on('clock.now', () => ({ value: NOW }))
+  on('command.register', () => ({ value: { command: 'ship-track' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: 'C:/site', surface: 'terminal', isInteractive: true })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await shows(ui, 'https://my-site.me.workers.dev')).toBe(true)
+  expect(await ui.find({ type: 'Text', text: /found automatically/ })).toBeDefined()
+  expect(await ui.find({ key: 'url' })).toBeUndefined()
+  await ui.unmount()
+})
+
+const ROW = (isWorking: boolean) =>
+  ({
+    plugin: 'ship-track',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking, maxRows: 10, bodyColumns: 80, scroll: { offset: 0, bodyRows: 10 }, view: {} },
+  }) as const
+
+test('the row above the prompt shows only what is waiting, and only between turns', async ($, on) => {
+  let dirty = ' M index.html\n'
+  on('process.run', (_, e) => {
+    const answers: Record<string, string> = {
+      'rev-parse --is-inside-work-tree': 'true',
+      'rev-parse --show-toplevel': 'C:/site',
+      'rev-parse --abbrev-ref HEAD': 'main',
+      'status --porcelain': dirty,
+      'rev-list --left-right --count @{u}...HEAD': '0\t0',
+      'remote get-url origin': 'https://github.com/me/site.git',
+    }
+    const out = answers[e.argv.slice(1).join(' ')]
+    return { value: { exitCode: out === undefined ? 1 : 0, stdout: out ?? '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('store.get', () => ({ value: undefined }))
+  on('session.cwd', () => ({ value: 'C:/site' }))
+  on('clock.now', () => ({ value: NOW }))
+  on('command.register', () => ({ value: { command: 'ship-track' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+  // Stands for the engine drawing the band when the mod passes.
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+
+  await $.session.start({ cwd: 'C:/site', surface: 'desktop', isInteractive: true })
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const row = await $.ui.mount({ ...ROW(false), surface })
+    expect(await row.find({ type: 'Text', text: 'me/site' })).toBeDefined()
+    expect(await row.find({ type: 'Text', text: /1 file not committed/ })).toBeDefined()
+    expect(await row.find({ key: 'ship' })).toBeDefined()
+    await row.unmount()
+
+    const busy = await $.ui.mount({ ...ROW(true), surface })
+    expect(await busy.find({ key: 'ship' })).toBeUndefined()
+    await busy.unmount()
+  }
+
+  dirty = ''
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m "x"' })
+  const row = await $.ui.mount({ ...ROW(false), surface: 'desktop' })
+  for (let i = 0; i < 500 && (await row.find({ key: 'ship' })); i++) await Promise.resolve()
+  expect(await row.find({ key: 'ship' })).toBeUndefined()
+  expect(await row.find({ type: 'Text', text: 'me/site' })).toBeUndefined()
+  await row.unmount()
 })

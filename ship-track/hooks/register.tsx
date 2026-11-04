@@ -1,14 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import { afterDeploy, commandFolder, look, remember, remembered, repoRoot } from './look'
+import { cleanUrl, learnSubdomain } from './detect'
+import { afterDeploy, commandFolder, guessAgain, look, remember, remembered, repoRoot } from './look'
 import { ago, toStages, toSvg } from './stages'
 
 const PANE = 'ship-track'
 const TITLE = 'Ship Track'
 // Change the tag when the snapshot's fields change.
 const snapshot = atom({ plugin: 'ship-track', key: 'snapshot' } as const, null, {
-  shape: 'snapshot-2',
+  shape: 'snapshot-3',
 })
 const isChecking = atom({ plugin: 'ship-track', key: 'isChecking' } as const, false)
 const folder = atom({ plugin: 'ship-track', key: 'folder' } as const, null as string | null)
@@ -47,34 +48,70 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'ship-track',
-      description: 'Show Ship Track. Add "url <link>" to set the live site, "deployed" to mark a deploy, or "here" to track this folder again.',
+      description: 'Show Ship Track. Add "url <link>" to set the live site ("url" alone finds it again), "deployed" to mark a deploy, or "here" to track this folder again.',
     })
+    // The row above the prompt shows when something waits; the full pane
+    // opens only with /ship-track.
     await refresh($)
-    if ((await read($, snapshot))?.isRepo) {
-      void $.ui.open({ id: PANE, title: TITLE })
-    }
 
     return next(e)
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const found = await read($, snapshot)
+    if (e.props.hasSurvey || e.props.isWorking || !found?.isRepo) return next(e)
+
+    const now = await $.clock.now()
+    const stuck = toStages(found, now).filter(stage => stage.state === 'waiting' || stage.state === 'problem')
+    if (stuck.length === 0) return next(e)
+
+    const { Box, Button, Text } = $.ui.resolve(e)
+
+    return (
+      <Box flexDirection="row" flexWrap="wrap" gap={1} alignItems="center">
+        <Text wrap="truncate-end">
+          <Text weight="semibold">{found.repo}</Text>
+          {stuck.map(stage => (
+            <Text color={stage.state === 'problem' ? 'error' : 'warning'}>{'  ·  '}{stage.note}</Text>
+          ))}
+        </Text>
+        {stuck.some(stage => stage.state === 'waiting') && (
+          <Button key="ship" variant="primary" label="Ship it" onPress={() => $.prompt.fill({ text: SHIP_PROMPT, mode: 'replace' })} />
+        )}
+        <Button key="details" dimColor label="Details" onPress={() => $.ui.open({ id: PANE, title: TITLE })} />
+      </Box>
+    )
   })
 
   on('command.run', { command: 'ship-track' }, async ($, e) => {
     const cwd = (await read($, folder)) ?? (await $.session.cwd())
     const [verb, value] = e.args.trim().split(/\s+/, 2)
 
-    if (verb === 'url' && value && /^https?:\/\//.test(value)) {
-      await remember($, cwd, { liveUrl: value })
+    const url = cleanUrl(value)
+    if (verb === 'url' && url) {
+      await remember($, cwd, { liveUrl: url, isGuessed: false })
+      await learnSubdomain($, url)
+    } else if (verb === 'url') {
+      // No link, or one with no site in it: forget it and find the site again
+      await remember($, cwd, { liveUrl: null, isGuessed: false })
+      guessAgain(cwd)
     } else if (verb === 'deployed') {
       await remember($, cwd, { lastDeployAt: await $.clock.now() })
     } else if (verb === 'here') {
       await goHome($)
     } else if (verb) {
-      return { text: 'Use /ship-track, /ship-track url https://your-site, /ship-track deployed, or /ship-track here.' }
+      return { text: 'Use /ship-track, /ship-track url https://your-site, /ship-track url (to find it again), /ship-track deployed, or /ship-track here.' }
     }
 
     await $.ui.open({ id: PANE, title: TITLE })
     await refresh($)
 
-    return { text: verb === 'url' ? `Ship Track now checks ${value}.` : 'Ship Track is open.' }
+    if (verb === 'url' && !url) {
+      const found = (await read($, snapshot))?.liveUrl
+      return { text: found ? `Ship Track found the live site: ${found}` : "Ship Track couldn't find the live site. Use /ship-track url https://your-site to set it." }
+    }
+
+    return { text: verb === 'url' ? `Ship Track now checks ${url}.` : 'Ship Track is open.' }
   })
 
   on('tool.call', async ($, e, next) => {
@@ -83,6 +120,11 @@ export const register: Register = on => {
 
     // Bookkeeping only: a failure here must never change what the tool did.
     try {
+      if (e.tool === 'Bash' || e.tool === 'PowerShell') {
+        const output = (ran.result as { stdout?: string } | undefined)?.stdout ?? ''
+        await learnSubdomain($, `${command}
+${output}`)
+      }
       if ((e.tool === 'Bash' || e.tool === 'PowerShell') && SHIPPING.test(command)) {
         const dir = commandFolder(command)
         if (dir) await follow($, dir)
@@ -171,7 +213,8 @@ export const register: Register = on => {
           )}
           <Text wrap="truncate-end">
             <Text dimColor>Live </Text>
-            {found.liveUrl ?? 'not set'}
+            {found.liveUrl ?? 'not found'}
+            {found.isLiveUrlGuessed && <Text dimColor>  (found automatically)</Text>}
           </Text>
           <Text dimColor size="footnote">
             {checking ? 'Checking…' : `Checked ${ago(found.checkedAt, now)}`}
@@ -183,7 +226,7 @@ export const register: Register = on => {
             <Button key="ship" variant="primary" label="Ship it" onPress={() => fill(SHIP_PROMPT)} />
           )}
           {!found.liveUrl && (
-            <Button key="url" label="Set live URL" onPress={() => fill('/ship-track url https://')} />
+            <Button key="url" label="Set live URL" onPress={() => fill('/ship-track url ')} />
           )}
           {following && (
             <Button key="here" dimColor label="Track this folder" onPress={() => goHome($)} />

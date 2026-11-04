@@ -1,5 +1,5 @@
 {
   "name": "ship-track",
-  "description": "A pane that shows where your work is on the way to production: committed, pushed to GitHub, and live on the site.",
+  "description": "Shows where your work is on the way to production (committed, pushed to GitHub, live on the site) in a row above the prompt when something is waiting, with a full pane on demand.",
   "types": "./types/index.d.ts"
 }

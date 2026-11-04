@@ -4,7 +4,7 @@ Two small mods for Claude Code that make building and shipping websites with Cla
 
 ## Ship Track
 
-A side pane that follows your work from your computer to the live site, in three stops:
+Follows your work from your computer to the live site, in three stops:
 
 **Commit → GitHub → Live**
 
@@ -12,14 +12,18 @@ A side pane that follows your work from your computer to the live site, in three
 - **GitHub** shows whether your branch is pushed, how many commits are waiting, and whether a pull request is open.
 - **Live** checks that your site responds, and when Claude deploys with `wrangler`, how many commits have landed since the last deploy.
 
-A stop that's waiting on something pulses amber, and one with a problem turns red. The pane refreshes after every turn and after any git, GitHub or deploy command. It opens by itself in any project that uses git.
+Most of the time it stays out of sight. When something is waiting (files not committed, commits not pushed, the site behind or not answering), one row shows above the prompt between turns, with the repo's name, what's waiting, **Ship it** and **Details**. It goes away once everything is shipped.
 
-Buttons: **Ship it** (asks Claude to commit, push, deploy and check the live site), **Set live URL** and **Refresh**.
+**Details** (or `/ship-track`) opens the full pane, where a stop that's waiting pulses amber and one with a problem turns red. Ship Track checks again after every turn and after any git, GitHub or deploy command. When Claude ships from another folder (`cd other-repo && git push`), Ship Track follows that repo and names it; **Track this folder** switches back.
+
+Pane buttons: **Ship it** (asks Claude to commit, push, deploy and check the live site), **Set live URL** and **Refresh**.
 
 Commands:
 
 - `/ship-track` opens the pane
+- `/ship-track here` tracks the session's own folder again
 - `/ship-track url https://your-site.com` sets the site to check
+- `/ship-track url` on its own forgets the site and finds it again
 - `/ship-track deployed` marks a deploy you did yourself
 
 ## Option Picker
@@ -52,5 +56,6 @@ Answer `y` to add the marketplace, then pick a scope. Each mod works on its own.
 ## Notes
 
 - Ship Track runs `git` and, if you have it, `gh` in your project folder. It only reads; it never commits or pushes.
-- The live site check is a plain request to the URL you set or the workers.dev or pages.dev address `wrangler deploy` printed. A URL you set yourself is never replaced by a deploy. A site that doesn't answer within 6 seconds shows as not reachable.
+- With no live URL set, Ship Track finds it: a custom domain in `wrangler.jsonc` or `wrangler.toml`, the website on the GitHub repo, a link to the Worker in the README or CLAUDE.md, then the Worker's own workers.dev address. It keeps the first one that answers and labels it "found automatically". The workers.dev address needs your account's workers.dev name, which Ship Track picks up from any workers.dev link it has seen in a deploy, a command or a URL you set.
+- The live site check is a plain request to the URL you set, the one it found, or the workers.dev or pages.dev address `wrangler deploy` printed. A URL you set yourself is never replaced by a deploy. A site that doesn't answer within 6 seconds shows as not reachable.
 - Deploys that happen outside Claude (like Cloudflare's automatic builds from GitHub) aren't recorded, so Ship Track treats a pushed branch plus a responding site as live.

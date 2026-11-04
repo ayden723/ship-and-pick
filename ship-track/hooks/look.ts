@@ -2,12 +2,16 @@ import type { EngineInterface } from 'claude-code'
 
 import type { PullRequest, Remembered, Snapshot } from '../types'
 
+import { cleanUrl, learnSubdomain, liveUrlGuesses } from './detect'
+
 export const storeKey = (cwd: string) => `ship-track:${cwd.toLowerCase()}`
 
 export async function remembered($: EngineInterface, cwd: string): Promise<Remembered> {
   const saved = (await $.store.get(storeKey(cwd))) as Partial<Remembered> | undefined
 
-  return { liveUrl: saved?.liveUrl ?? null, lastDeployAt: saved?.lastDeployAt ?? null }
+  const liveUrl = cleanUrl(saved?.liveUrl)
+
+  return { liveUrl, lastDeployAt: saved?.lastDeployAt ?? null, isGuessed: liveUrl !== null && saved?.isGuessed === true }
 }
 
 export async function remember($: EngineInterface, cwd: string, change: Partial<Remembered>) {
@@ -53,12 +57,38 @@ export function repoName(remote: string | null, folder: string): string {
 const DEPLOYED_URL = /https:\/\/[^\s'"<>)]+?\.(?:workers|pages)\.dev\b[^\s'"<>)]*/i
 
 // What a successful deploy changes. The workers.dev or pages.dev address
-// wrangler printed becomes the live URL only when none is set, so a custom
-// domain set with /ship-track url stays.
+// wrangler printed becomes the live URL when none is set or the one set was
+// only a guess, so a custom domain set with /ship-track url stays.
 export function afterDeploy(saved: Remembered, output: string, at: number): Partial<Remembered> {
   const url = output.match(DEPLOYED_URL)?.[0] ?? null
 
-  return url && !saved.liveUrl ? { lastDeployAt: at, liveUrl: url } : { lastDeployAt: at }
+  return url && (!saved.liveUrl || saved.isGuessed) ? { lastDeployAt: at, liveUrl: url, isGuessed: false } : { lastDeployAt: at }
+}
+
+const GUESS_EVERY_MS = 10 * 60 * 1000
+const lastGuessAt = new Map<string, number>()
+
+// Forgets when a folder was last guessed for, so the next look guesses again.
+export const guessAgain = (cwd: string) => lastGuessAt.delete(cwd.toLowerCase())
+
+// With no live URL set, tries each likely address and keeps the first that
+// answers. Looks again at most every ten minutes while nothing answers.
+async function findLiveUrl($: EngineInterface, cwd: string, top: string, now: number): Promise<string | null> {
+  const key = cwd.toLowerCase()
+  if (now - (lastGuessAt.get(key) ?? -Infinity) < GUESS_EVERY_MS) return null
+  lastGuessAt.set(key, now)
+
+  const homepage = await run($, top, ['gh', 'repo', 'view', '--json', 'homepageUrl', '--jq', '.homepageUrl'])
+  for (const url of await liveUrlGuesses($, top, homepage || null)) {
+    const status = await liveStatus($, url)
+    if (status > 0 && status < 400) {
+      await remember($, cwd, { liveUrl: url, isGuessed: true })
+      await learnSubdomain($, url)
+      return url
+    }
+  }
+
+  return null
 }
 
 const QUOTED = String.raw`"([^"]+)"|'([^']+)'|([^\s;&|]+)`
@@ -87,7 +117,7 @@ export async function repoRoot($: EngineInterface, dir: string): Promise<string 
 export async function look($: EngineInterface, folder: string | null = null): Promise<Snapshot> {
   const cwd = folder ?? (await $.session.cwd())
   const now = await $.clock.now()
-  const saved = await remembered($, cwd)
+  let saved = await remembered($, cwd)
   const empty: Snapshot = {
     isRepo: false,
     repo: repoName(null, cwd),
@@ -99,6 +129,7 @@ export async function look($: EngineInterface, folder: string | null = null): Pr
     hasRemote: false,
     pr: null,
     liveUrl: saved.liveUrl,
+    isLiveUrlGuessed: saved.isGuessed,
     liveStatus: null,
     lastDeployAt: saved.lastDeployAt,
     commitsSinceDeploy: 0,
@@ -107,6 +138,11 @@ export async function look($: EngineInterface, folder: string | null = null): Pr
 
   if ((await run($, cwd, ['git', 'rev-parse', '--is-inside-work-tree'])) !== 'true') {
     return empty
+  }
+
+  if (!saved.liveUrl) {
+    const top = await run($, cwd, ['git', 'rev-parse', '--show-toplevel'])
+    if (top && (await findLiveUrl($, cwd, top, now))) saved = await remembered($, cwd)
   }
 
   const [top, branch, status, counts, last, remote, pr, live] = await Promise.all([
@@ -143,6 +179,8 @@ export async function look($: EngineInterface, folder: string | null = null): Pr
     lastCommit: hash ? { hash, subject: subject ?? '', at: Number(seconds) * 1000 } : null,
     hasRemote: remote !== null,
     pr: parsedPr,
+    liveUrl: saved.liveUrl,
+    isLiveUrlGuessed: saved.isGuessed,
     liveStatus: live,
     commitsSinceDeploy: since ? Number(since) : 0,
   }
