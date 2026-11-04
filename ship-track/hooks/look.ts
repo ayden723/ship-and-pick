@@ -14,9 +14,9 @@ export async function remember($: EngineInterface, cwd: string, change: Partial<
   await $.store.set(storeKey(cwd), { ...(await remembered($, cwd)), ...change })
 }
 
-async function run($: EngineInterface, argv: string[]): Promise<string | null> {
+async function run($: EngineInterface, cwd: string, argv: string[]): Promise<string | null> {
   try {
-    const out = await $.process.run(argv, { timeoutMs: 8000 })
+    const out = await $.process.run(argv, { cwd, timeoutMs: 8000 })
 
     return out.exitCode === 0 ? out.stdout.trim() : null
   } catch {
@@ -61,10 +61,31 @@ export function afterDeploy(saved: Remembered, output: string, at: number): Part
   return url && !saved.liveUrl ? { lastDeployAt: at, liveUrl: url } : { lastDeployAt: at }
 }
 
-// One look at the project: git for the first two stops, the stored live URL
-// and last deploy for the third.
-export async function look($: EngineInterface): Promise<Snapshot> {
-  const cwd = await $.session.cwd()
+const QUOTED = String.raw`"([^"]+)"|'([^']+)'|([^\s;&|]+)`
+const GIT_DASH_C = new RegExp(String.raw`\bgit\s+-C\s+(?:${QUOTED})`)
+const CD = new RegExp(String.raw`(?:^|&&|;|\|\|)\s*(?:cd|Set-Location|pushd)\s+(?:${QUOTED})`, 'i')
+
+// The folder a shell command works in when it says so with `git -C <dir>` or
+// a leading `cd <dir>`, in the form git can take on Windows. Null when the
+// command runs where the session is.
+export function commandFolder(command: string): string | null {
+  const m = command.match(GIT_DASH_C) ?? command.match(CD)
+  const dir = m ? (m[1] ?? m[2] ?? m[3] ?? null) : null
+  if (!dir || /^[~$-]/.test(dir)) return null
+
+  // Git Bash spells C:\ as /c/.
+  return dir.replace(/^\/([a-z])(?=\/|$)/i, (_, drive: string) => `${drive.toUpperCase()}:`)
+}
+
+// The top folder of the repo that holds `dir`, or null outside a repo.
+export async function repoRoot($: EngineInterface, dir: string): Promise<string | null> {
+  return run($, dir, ['git', 'rev-parse', '--show-toplevel'])
+}
+
+// One look at the project in `folder` (the session's folder when null): git
+// for the first two stops, the stored live URL and last deploy for the third.
+export async function look($: EngineInterface, folder: string | null = null): Promise<Snapshot> {
+  const cwd = folder ?? (await $.session.cwd())
   const now = await $.clock.now()
   const saved = await remembered($, cwd)
   const empty: Snapshot = {
@@ -84,18 +105,18 @@ export async function look($: EngineInterface): Promise<Snapshot> {
     checkedAt: now,
   }
 
-  if ((await run($, ['git', 'rev-parse', '--is-inside-work-tree'])) !== 'true') {
+  if ((await run($, cwd, ['git', 'rev-parse', '--is-inside-work-tree'])) !== 'true') {
     return empty
   }
 
   const [top, branch, status, counts, last, remote, pr, live] = await Promise.all([
-    run($, ['git', 'rev-parse', '--show-toplevel']),
-    run($, ['git', 'rev-parse', '--abbrev-ref', 'HEAD']),
-    run($, ['git', 'status', '--porcelain']),
-    run($, ['git', 'rev-list', '--left-right', '--count', '@{u}...HEAD']),
-    run($, ['git', 'log', '-1', '--format=%h%x1f%s%x1f%ct']),
-    run($, ['git', 'remote', 'get-url', 'origin']),
-    run($, ['gh', 'pr', 'view', '--json', 'number,state,url']),
+    run($, cwd, ['git', 'rev-parse', '--show-toplevel']),
+    run($, cwd, ['git', 'rev-parse', '--abbrev-ref', 'HEAD']),
+    run($, cwd, ['git', 'status', '--porcelain']),
+    run($, cwd, ['git', 'rev-list', '--left-right', '--count', '@{u}...HEAD']),
+    run($, cwd, ['git', 'log', '-1', '--format=%h%x1f%s%x1f%ct']),
+    run($, cwd, ['git', 'remote', 'get-url', 'origin']),
+    run($, cwd, ['gh', 'pr', 'view', '--json', 'number,state,url']),
     saved.liveUrl ? liveStatus($, saved.liveUrl) : Promise.resolve(null),
   ])
 
@@ -108,7 +129,7 @@ export async function look($: EngineInterface): Promise<Snapshot> {
     parsedPr = null
   }
   const since = saved.lastDeployAt
-    ? await run($, ['git', 'rev-list', '--count', `--since=${Math.floor(saved.lastDeployAt / 1000)}`, 'HEAD'])
+    ? await run($, cwd, ['git', 'rev-list', '--count', `--since=${Math.floor(saved.lastDeployAt / 1000)}`, 'HEAD'])
     : null
 
   return {

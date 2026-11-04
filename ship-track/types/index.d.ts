@@ -28,6 +28,11 @@ export type Remembered = { liveUrl: string | null; lastDeployAt: number | null }
 
 declare module 'claude-code' {
   interface PluginState {
-    'ship-track': { snapshot: Shaped<Snapshot | null>; isChecking: boolean }
+    'ship-track': {
+      snapshot: Shaped<Snapshot | null>
+      isChecking: boolean
+      // The repo Claude last shipped from, when it isn't the session's own.
+      folder: string | null
+    }
   }
 }

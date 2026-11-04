@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import { afterDeploy, look, remember, remembered } from './look'
+import { afterDeploy, commandFolder, look, remember, remembered, repoRoot } from './look'
 import { ago, toStages, toSvg } from './stages'
 
 const PANE = 'ship-track'
@@ -11,17 +11,32 @@ const snapshot = atom({ plugin: 'ship-track', key: 'snapshot' } as const, null, 
   shape: 'snapshot-2',
 })
 const isChecking = atom({ plugin: 'ship-track', key: 'isChecking' } as const, false)
+const folder = atom({ plugin: 'ship-track', key: 'folder' } as const, null as string | null)
 
 const SHIPPING = /\b(git|gh|wrangler)\b|\bnpm run deploy\b|\bpnpm deploy\b/
 const DEPLOY = /\bwrangler\s+(pages\s+)?deploy\b|\b(npm|pnpm|yarn)\s+(run\s+)?deploy\b/
 const SHIP_PROMPT = 'Commit, push and deploy this, then confirm the live site shows the change.'
+
+// Points the pane at the repo a command shipped from, or back at the
+// session's own repo when that is the one.
+async function follow($: EngineInterface, dir: string) {
+  const [top, home] = await Promise.all([repoRoot($, dir), repoRoot($, await $.session.cwd())])
+  if (!top) return
+
+  await update($, folder, () => (top === home ? null : top))
+}
+
+async function goHome($: EngineInterface) {
+  await update($, folder, () => null)
+  await refresh($)
+}
 
 async function refresh($: EngineInterface) {
   if (await read($, isChecking)) return
 
   await update($, isChecking, () => true)
   try {
-    const found = await look($)
+    const found = await look($, await read($, folder))
     await update($, snapshot, () => found)
   } finally {
     await update($, isChecking, () => false)
@@ -32,7 +47,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'ship-track',
-      description: 'Show Ship Track. Add "url <link>" to set the live site, or "deployed" to mark a deploy.',
+      description: 'Show Ship Track. Add "url <link>" to set the live site, "deployed" to mark a deploy, or "here" to track this folder again.',
     })
     await refresh($)
     if ((await read($, snapshot))?.isRepo) {
@@ -43,15 +58,17 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'ship-track' }, async ($, e) => {
-    const cwd = await $.session.cwd()
+    const cwd = (await read($, folder)) ?? (await $.session.cwd())
     const [verb, value] = e.args.trim().split(/\s+/, 2)
 
     if (verb === 'url' && value && /^https?:\/\//.test(value)) {
       await remember($, cwd, { liveUrl: value })
     } else if (verb === 'deployed') {
       await remember($, cwd, { lastDeployAt: await $.clock.now() })
+    } else if (verb === 'here') {
+      await goHome($)
     } else if (verb) {
-      return { text: 'Use /ship-track, /ship-track url https://your-site, or /ship-track deployed.' }
+      return { text: 'Use /ship-track, /ship-track url https://your-site, /ship-track deployed, or /ship-track here.' }
     }
 
     await $.ui.open({ id: PANE, title: TITLE })
@@ -67,8 +84,10 @@ export const register: Register = on => {
     // Bookkeeping only: a failure here must never change what the tool did.
     try {
       if ((e.tool === 'Bash' || e.tool === 'PowerShell') && SHIPPING.test(command)) {
+        const dir = commandFolder(command)
+        if (dir) await follow($, dir)
         if (DEPLOY.test(command) && ran.deny === undefined && ran.isError !== true) {
-          const cwd = await $.session.cwd()
+          const cwd = (await read($, folder)) ?? (await $.session.cwd())
           const output = (ran.result as { stdout?: string } | undefined)?.stdout ?? ''
           await remember($, cwd, afterDeploy(await remembered($, cwd), output, await $.clock.now()))
         }
@@ -94,6 +113,7 @@ export const register: Register = on => {
     const { Box, Button, Text } = elements
     const found = await read($, snapshot)
     const checking = await read($, isChecking)
+    const following = (await read($, folder)) !== null
     const now = await $.clock.now()
 
     if (!found) {
@@ -164,6 +184,9 @@ export const register: Register = on => {
           )}
           {!found.liveUrl && (
             <Button key="url" label="Set live URL" onPress={() => fill('/ship-track url https://')} />
+          )}
+          {following && (
+            <Button key="here" dimColor label="Track this folder" onPress={() => goHome($)} />
           )}
           <Button key="refresh" dimColor label="Refresh" onPress={() => refresh($)} />
         </Box>

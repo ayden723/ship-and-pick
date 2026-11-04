@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { afterDeploy, repoName, storeKey } from '../hooks/look'
+import { afterDeploy, commandFolder, repoName, storeKey } from '../hooks/look'
 import { toStages, toSvg } from '../hooks/stages'
 import type { Snapshot } from '../types'
 
@@ -106,6 +106,59 @@ test('the repo is named from GitHub, else from the folder', () => {
   expect(repoName('https://github.com/me/site', 'C:/x')).toBe('me/site')
   expect(repoName(null, 'C:\\Users\\whoop\\Downloads\\New Spectrogram')).toBe('New Spectrogram')
   expect(repoName('https://gitlab.com/me/site.git', 'C:/work/site/')).toBe('site')
+})
+
+// The pane redraws once a background check finishes, so look a few times.
+async function shows(ui: { find: (q: { type: 'Text'; text: string }) => Promise<unknown> }, text: string) {
+  for (let i = 0; i < 500; i++) {
+    if (await ui.find({ type: 'Text', text })) return true
+    await Promise.resolve()
+  }
+  return false
+}
+
+test('a command names the folder it ships from', () => {
+  expect(commandFolder('cd "/c/Users/me/Claude Code Mods" && git push')).toBe('C:/Users/me/Claude Code Mods')
+  expect(commandFolder('git -C ../site commit -m "x"')).toBe('../site')
+  expect(commandFolder("Set-Location 'C:\\work\\site'; git push")).toBe('C:\\work\\site')
+  // A folder inside the same repo; follow() then finds the session's own repo.
+  expect(commandFolder('npm run build && cd dist && wrangler deploy')).toBe('dist')
+  expect(commandFolder('git push')).toBe(null)
+  expect(commandFolder('cd ~ && git status')).toBe(null)
+})
+
+test('the pane follows the repo Claude pushed from, and comes back', async ($, on) => {
+  const repos: Record<string, Record<string, string>> = {
+    'C:/home': { 'remote get-url origin': 'https://github.com/me/home.git' },
+    'C:/mods': { 'remote get-url origin': 'https://github.com/me/ship-and-pick.git' },
+  }
+  on('process.run', (_, e) => {
+    const dir = e.init?.cwd === 'C:/mods' ? 'C:/mods' : 'C:/home'
+    const args = e.argv.slice(1).join(' ')
+    const out =
+      args === 'rev-parse --is-inside-work-tree' ? 'true'
+      : args === 'rev-parse --show-toplevel' ? dir
+      : args === 'rev-parse --abbrev-ref HEAD' ? 'main'
+      : repos[dir]![args]
+    return { value: { exitCode: out === undefined ? 1 : 0, stdout: out ?? '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('store.get', () => ({ value: undefined }))
+  on('session.cwd', () => ({ value: 'C:/home' }))
+  on('clock.now', () => ({ value: NOW }))
+  on('command.register', () => ({ value: { command: 'ship-track' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+
+  await $.session.start({ cwd: 'C:/home', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'cd "/c/mods" && git push' })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await shows(ui, 'me/ship-and-pick')).toBe(true)
+  await ui.press({ key: 'here' })
+  expect(await shows(ui, 'me/home')).toBe(true)
+  expect(await ui.find({ key: 'here' })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('a deploy keeps a live URL set by hand and ignores other links', () => {
